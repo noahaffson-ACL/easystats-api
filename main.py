@@ -157,20 +157,3 @@ def analyze(body: AnalyzeRequest):
             }
 
     return results
-```
-
-**`requirements.txt`**
-```
-fastapi==0.115.0
-uvicorn==0.30.0
-pandas==2.2.0
-numpy==1.26.0
-scipy==1.13.0
-statsmodels==0.14.0
-python-docx==1.1.0
-pydantic==2.7.0
-```
-
-**`Procfile`**
-```
-web: uvicorn main:app --host 0.0.0.0 --port $PORT
