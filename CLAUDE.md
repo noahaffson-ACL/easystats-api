@@ -6,18 +6,20 @@ Guidance for AI assistants (and humans) working in this repository.
 
 `easystats-api` is a small **FastAPI** microservice that powers the statistical
 analysis engine for **ThèsIA**, a tool that processes KoboToolbox survey data,
-runs automated statistical tests, and exports results (e.g. to Word).
+runs automated statistical tests, and exports results to Word.
 
-The entire service currently lives in a single file: `main.py`. There is no
-package structure, database, or background worker — just a stateless HTTP API
-that receives JSON data, runs pandas/scipy computations, and returns JSON
-results.
+There is no database or background worker — just a stateless HTTP API that
+receives JSON data, runs pandas/scipy/statsmodels computations, and returns
+JSON results (or a generated .docx file).
 
 ## Repository layout
 
 ```
 .
-├── main.py            # FastAPI app — all routes and logic
+├── main.py            # FastAPI app — routes, auth, error handling
+├── stats_engine.py    # Statistical logic: descriptive tables, bivariate
+│                       tests (2+ groups), multivariable regression
+├── docx_export.py      # Builds a Word report from analysis results
 ├── requirements.txt   # Python dependencies (pinned versions)
 ├── Procfile           # Process command for Heroku-style deploys
 ├── railway.json       # Railway.app deployment config
@@ -47,14 +49,13 @@ There are currently **no automated tests** in this repo.
 
 ## Authentication
 
-- A `verify_api_key` dependency checks an `x-api-key` header against the
-  `RAILWAY_API_KEY` environment variable.
-- **Note:** as of the current code, `verify_api_key` is defined but not wired
-  up as a `Depends(...)` on any route — endpoints are effectively open. If you
-  add new endpoints that should be protected, use
-  `Depends(verify_api_key)` and confirm whether existing endpoints should
-  also be locked down (this may be intentional during development, so check
-  with the user before changing it broadly).
+- `verify_api_key` (in `main.py`) checks the `x-api-key` header against the
+  `RAILWAY_API_KEY` environment variable, and is wired up via
+  `Depends(verify_api_key)` on `/detect-variables`, `/analyze`, and
+  `/export-docx`.
+- If `RAILWAY_API_KEY` is **not set** (e.g. local dev), auth is skipped
+  entirely so the API stays usable without configuration. Set
+  `RAILWAY_API_KEY` in the deployment environment to enforce the key.
 
 ## CORS
 
@@ -65,6 +66,8 @@ since it may break the deployed frontend.
 
 ## Endpoints
 
+All endpoints below (except `/health`) require `Depends(verify_api_key)`.
+
 - `GET /health` — basic health check, returns `{"status": "ok", ...}`
 - `POST /detect-variables` — given `{"data": [...]}` (a list of row dicts,
   typically exported from KoboToolbox), infers each column's type
@@ -72,13 +75,33 @@ since it may break the deployed frontend.
   percentage, cardinality, and sample values. Columns prefixed with `_`
   (Kobo system columns) are skipped.
 - `POST /analyze` — given data plus `variable_dependante`,
-  `variables_independantes`, `type_etude`, and optional `groupes`, produces:
-  - a descriptive table (`tableau_descriptif`) per column (mean/SD/median/
+  `variables_independantes` (optional list), `type_etude` (optional), and
+  `groupes` (optional), produces:
+  - `tableau_descriptif`: a descriptive table per column (mean/SD/median/
     quartiles for continuous variables, frequency tables for categorical)
-  - a `test_principal` block when `groupes` is provided and has exactly 2
-    levels: chooses t-test vs Mann-Whitney U (based on Shapiro-Wilk
-    normality) for numeric outcomes, or Chi²/Fisher's exact for categorical
-    outcomes.
+  - `test_principal`: present when `groupes` is provided and has 2+ levels.
+    For numeric outcomes: t-test/Mann-Whitney U (2 groups) or
+    ANOVA/Kruskal-Wallis (3+ groups), chosen via per-group Shapiro-Wilk
+    normality. For categorical outcomes: Chi² (or Fisher's exact for 2x2
+    tables with expected counts < 5).
+  - `regression`: present when `variables_independantes` is non-empty.
+    Runs an OLS (linear) or logistic regression via statsmodels, chosen
+    automatically based on whether `variable_dependante` is continuous or
+    binary. Returns coefficients/odds ratios with 95% CIs and p-values.
+    If the regression can't be computed (e.g. non-binary categorical
+    outcome), `regression_erreur` is returned instead with an explanation.
+  - `type_etude` is currently accepted but not yet used to alter the
+    analysis logic.
+- `POST /export-docx` — same request body as `/analyze`; runs the same
+  analysis pipeline and returns a generated `.docx` report
+  (`rapport_analyse.docx`) via `docx_export.build_report`.
+
+### Error handling
+
+`/analyze` and `/export-docx` raise `HTTPException(422)` for invalid input
+(unknown columns, insufficient data for a regression, non-binary outcome for
+logistic regression, etc.), and `HTTPException(400)` for unexpected errors —
+avoid letting raw exceptions bubble up as 500s.
 
 ## Conventions
 
@@ -109,11 +132,15 @@ since it may break the deployed frontend.
 
 ## Making changes
 
-- Since everything is in `main.py`, new endpoints/models can be added inline
-  following the existing pattern (Pydantic request model → route function
-  using pandas/scipy). If the file grows significantly, consider proposing a
-  split (e.g. `routers/`, `services/`) to the user rather than doing it
-  unilaterally.
+- Keep route definitions, request validation, and error handling in
+  `main.py`; put statistical logic in `stats_engine.py` and Word-generation
+  logic in `docx_export.py`. `run_analysis()` in `stats_engine.py` is the
+  single shared pipeline used by both `/analyze` and `/export-docx` — extend
+  it rather than duplicating logic per endpoint.
 - When adding new statistical tests or output fields, keep response JSON
   shapes backward compatible where possible, since the Lovable frontend
   consumes this API directly.
+- There are still no automated tests. When adding new statistical logic,
+  consider adding `pytest` tests for `stats_engine.py` functions, since
+  correctness bugs there can produce scientifically wrong results without
+  any crash.
