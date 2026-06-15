@@ -86,21 +86,29 @@ All endpoints below (except `/health`) require `Depends(verify_api_key)`.
     normality. For categorical outcomes: Chi² (or Fisher's exact for 2x2
     tables with expected counts < 5). Includes an `effect_size` block
     (Cohen's d, rank-biserial r, eta², odds ratio with 95% CI, or Cramér's V
-    depending on the test).
+    depending on the test), and an `interpretation` field: a plain-French
+    sentence describing the finding (which group is higher/has the higher
+    rate, and whether the difference is likely real or due to chance) —
+    avoid jargon-only output, every test/correlation/coefficient should be
+    paired with one of these sentences.
   - `variables_independantes` drives one of two analyses, selected by
     `type_etude`:
     - `type_etude == "correlation"` → `correlations`: pairwise Pearson
       (if normal) or Spearman correlation between `variable_dependante`
       and each numeric variable in `variables_independantes`, with r,
-      p-value and a qualitative interpretation. Non-numeric variables are
+      p-value, a qualitative `force` (négligeable/faible/modérée/forte/très
+      forte), and an `interpretation` sentence. Non-numeric variables are
       reported with an `erreur` field instead of being silently dropped.
       Failures (e.g. non-numeric `variable_dependante`) produce
       `correlations_erreur`.
     - any other `type_etude` (default) → `regression`: OLS (linear) or
       logistic regression via statsmodels, chosen automatically based on
       whether `variable_dependante` is continuous or binary. Returns
-      coefficients/odds ratios with 95% CIs and p-values. Failures (e.g.
-      non-binary categorical outcome) produce `regression_erreur`.
+      coefficients/odds ratios with 95% CIs, p-values, and a per-coefficient
+      `interpretation` sentence (effect direction/magnitude in plain French,
+      odds ratios framed as "multiplie/divise par X les chances de...").
+      Failures (e.g. non-binary categorical outcome) produce
+      `regression_erreur`.
 - `POST /export-docx` — same request body as `/analyze`; runs the same
   analysis pipeline and returns a generated `.docx` report
   (`rapport_analyse.docx`) via `docx_export.build_report`.

@@ -193,6 +193,27 @@ def _interpret_cramers_v(v: float) -> str:
     return "fort"
 
 
+# ── Plain-language interpretation ──────────────────────
+
+def _phrase_significativite(p_val: float, significatif: bool, sujet: str = "Cette différence") -> str:
+    if significatif:
+        return (
+            f"{sujet} est statistiquement significative (p = {p_val}) : "
+            "elle est probablement réelle, et pas due au hasard."
+        )
+    return (
+        f"{sujet} n'est pas statistiquement significative (p = {p_val}) : "
+        "elle pourrait simplement être due au hasard, on ne peut pas conclure."
+    )
+
+
+def _phrase_correlation(var_dep: str, var: str, r: float, p_val: float,
+                         significatif: bool, force: str) -> str:
+    direction = "augmenter" if r > 0 else "diminuer"
+    phrase = f"Plus « {var} » augmente, plus « {var_dep} » a tendance à {direction} (lien {force}). "
+    return phrase + _phrase_significativite(p_val, significatif, sujet="Cette relation")
+
+
 def bivariate_test(df: pd.DataFrame, var_dep: str, var_groupe: str) -> Optional[dict]:
     """Compare `var_dep` across the groups defined by `var_groupe`.
 
@@ -251,6 +272,23 @@ def bivariate_test(df: pd.DataFrame, var_dep: str, var_groupe: str) -> Optional[
         }
         if effect_size is not None:
             result["effect_size"] = effect_size
+
+        means = {str(g): float(np.mean(s)) for g, s in zip(groupes, samples)}
+        sorted_means = sorted(means.items(), key=lambda x: x[1], reverse=True)
+        if n_groupes == 2:
+            diff = sorted_means[0][1] - sorted_means[1][1]
+            interpretation = (
+                f"En moyenne, « {var_dep} » est plus élevé chez « {sorted_means[0][0]} » "
+                f"({sorted_means[0][1]:.2f}) que chez « {sorted_means[1][0]} » "
+                f"({sorted_means[1][1]:.2f}) — différence de {diff:.2f}. "
+            )
+        else:
+            interpretation = (
+                f"« {var_dep} » varie selon les groupes de « {var_groupe} » : moyenne la plus "
+                f"élevée chez « {sorted_means[0][0]} » ({sorted_means[0][1]:.2f}), la plus basse "
+                f"chez « {sorted_means[-1][0]} » ({sorted_means[-1][1]:.2f}). "
+            )
+        result["interpretation"] = interpretation + _phrase_significativite(result["p_value"], result["significatif"])
         return result
 
     # Categorical outcome
@@ -283,6 +321,23 @@ def bivariate_test(df: pd.DataFrame, var_dep: str, var_groupe: str) -> Optional[
         "groupes": [str(g) for g in groupes],
         "effect_size": effect_size
     }
+
+    levels_dep = sorted(sub[var_dep].unique(), key=str)
+    if len(levels_dep) == 2:
+        event = levels_dep[1]
+        props = {}
+        for g in groupes:
+            gs = sub[sub[var_groupe] == g]
+            props[str(g)] = float((gs[var_dep] == event).mean() * 100)
+        sorted_props = sorted(props.items(), key=lambda x: x[1], reverse=True)
+        interpretation = (
+            f"« {event} » est observé chez {sorted_props[0][1]:.1f}% du groupe « {sorted_props[0][0]} » "
+            f"contre {sorted_props[-1][1]:.1f}% du groupe « {sorted_props[-1][0]} ». "
+        )
+    else:
+        interpretation = f"La répartition de « {var_dep} » diffère selon les groupes de « {var_groupe} ». "
+
+    result["interpretation"] = interpretation + _phrase_significativite(result["p_value"], result["significatif"])
     return result
 
 
@@ -327,14 +382,42 @@ def regression_analysis(df: pd.DataFrame, var_dep: str, vars_indep: List[str]) -
     conf_int = model.conf_int()
     coefficients = []
     for var in model.params.index:
+        coef_val = round(float(transform(model.params[var])), 4)
+        p_value = round(float(model.pvalues[var]), 4)
+        significatif = p_value < 0.05
+
+        if var == "const":
+            interpretation = "Valeur de référence du modèle (constante), non interprétable isolément."
+        elif model_type == "régression linéaire":
+            direction = "augmentation" if coef_val >= 0 else "diminution"
+            interpretation = (
+                f"Toutes choses égales par ailleurs, chaque unité supplémentaire de « {var} » est "
+                f"associée à une {direction} de {abs(coef_val):.2f} de « {var_dep} ». "
+            ) + _phrase_significativite(p_value, significatif, sujet="Cette association")
+        else:
+            if coef_val > 1:
+                interpretation = (
+                    f"Toutes choses égales par ailleurs, « {var} » multiplie par {coef_val:.2f} "
+                    f"les chances de « {levels[1]} » (par rapport à « {levels[0]} »). "
+                )
+            elif coef_val < 1:
+                interpretation = (
+                    f"Toutes choses égales par ailleurs, « {var} » divise par {1 / coef_val:.2f} "
+                    f"les chances de « {levels[1]} » (effet protecteur par rapport à « {levels[0]} »). "
+                )
+            else:
+                interpretation = f"« {var} » n'a pas d'effet notable sur les chances de « {levels[1]} ». "
+            interpretation += _phrase_significativite(p_value, significatif, sujet="Cette association")
+
         coefficients.append({
             "variable": var,
-            coef_label: round(float(transform(model.params[var])), 4),
+            coef_label: coef_val,
             "ic95": [
                 round(float(transform(conf_int.loc[var, 0])), 4),
                 round(float(transform(conf_int.loc[var, 1])), 4)
             ],
-            "p_value": round(float(model.pvalues[var]), 4),
+            "p_value": p_value,
+            "interpretation": interpretation
         })
 
     result = {
@@ -382,14 +465,20 @@ def correlation_analysis(df: pd.DataFrame, var_dep: str, vars_indep: List[str]) 
             r, p_val = stats.spearmanr(sub[var_dep], sub[var])
             methode = "Spearman"
 
+        r_rounded = round(float(r), 4)
+        p_rounded = round(float(p_val), 4)
+        significatif = bool(p_val < 0.05)
+        force = _interpret_r(float(r))
+
         correlations.append({
             "variable": var,
             "methode": methode,
-            "r": round(float(r), 4),
-            "p_value": round(float(p_val), 4),
-            "significatif": bool(p_val < 0.05),
+            "r": r_rounded,
+            "p_value": p_rounded,
+            "significatif": significatif,
             "n": int(len(sub)),
-            "interpretation": _interpret_r(float(r))
+            "force": force,
+            "interpretation": _phrase_correlation(var_dep, var, r_rounded, p_rounded, significatif, force)
         })
 
     return correlations
@@ -478,7 +567,8 @@ def run_auto_analysis(data: List[dict], variable_principale: str) -> dict:
                     "statistic": corr["r"],
                     "p_value": corr["p_value"],
                     "significatif": corr["significatif"],
-                    "effect_size": {"nom": "r", "valeur": corr["r"], "interpretation": corr["interpretation"]}
+                    "effect_size": {"nom": "r", "valeur": corr["r"], "interpretation": corr["force"]},
+                    "interpretation": corr["interpretation"]
                 }
             else:
                 test = bivariate_test(df, var, variable_principale)
@@ -517,6 +607,9 @@ def run_auto_analysis(data: List[dict], variable_principale: str) -> dict:
         "n_variables_testees": n_tests,
         "n_associations_significatives": len(significatifs),
         "variables_significatives": [a["variable"] for a in significatifs],
+        "phrases_significatives": [
+            f"{a['variable']} : {a['interpretation']}" for a in significatifs
+        ],
         "n_associations_significatives_apres_correction": len(significatifs_corriges),
         "variables_significatives_apres_correction": [a["variable"] for a in significatifs_corriges],
         "avertissement": (

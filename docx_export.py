@@ -72,6 +72,11 @@ def _add_test_principal(doc: Document, test: dict) -> None:
         else:
             p.add_run(f"{effect_size['nom']} = {effect_size['valeur']} ({effect_size['interpretation']})")
 
+    if test.get("interpretation"):
+        p = doc.add_paragraph()
+        p.add_run("En clair : ").bold = True
+        p.add_run(test["interpretation"])
+
     doc.add_paragraph()
 
 
@@ -90,10 +95,12 @@ def _add_regression(doc: Document, regression: dict) -> None:
         )
         coef_label = "Odds ratio"
 
-    table = doc.add_table(rows=1, cols=4)
+    table = doc.add_table(rows=1, cols=5)
     table.style = "Light Grid Accent 1"
     hdr = table.rows[0].cells
-    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text = "Variable", coef_label, "IC 95%", "p-value"
+    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text, hdr[4].text = (
+        "Variable", coef_label, "IC 95%", "p-value", "En clair"
+    )
 
     for coef in regression["coefficients"]:
         row = table.add_row().cells
@@ -102,6 +109,7 @@ def _add_regression(doc: Document, regression: dict) -> None:
         row[1].text = str(value)
         row[2].text = f"[{coef['ic95'][0]} ; {coef['ic95'][1]}]"
         row[3].text = str(coef["p_value"])
+        row[4].text = coef.get("interpretation", "")
 
     doc.add_paragraph()
 
@@ -109,11 +117,11 @@ def _add_regression(doc: Document, regression: dict) -> None:
 def _add_correlations(doc: Document, correlations: list) -> None:
     doc.add_heading("Corrélations", level=2)
 
-    table = doc.add_table(rows=1, cols=5)
+    table = doc.add_table(rows=1, cols=6)
     table.style = "Light Grid Accent 1"
     hdr = table.rows[0].cells
-    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text, hdr[4].text = (
-        "Variable", "Méthode", "r", "p-value", "Force"
+    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text, hdr[4].text, hdr[5].text = (
+        "Variable", "Méthode", "r", "p-value", "Force", "En clair"
     )
 
     for corr in correlations:
@@ -126,7 +134,8 @@ def _add_correlations(doc: Document, correlations: list) -> None:
         row[1].text = corr["methode"]
         row[2].text = str(corr["r"])
         row[3].text = str(corr["p_value"])
-        row[4].text = corr["interpretation"]
+        row[4].text = corr["force"]
+        row[5].text = corr["interpretation"]
 
     doc.add_paragraph()
 
@@ -148,8 +157,9 @@ def _add_resume(doc: Document, resume: dict, variable_principale: str) -> None:
 
     if resume["variables_significatives"]:
         p = doc.add_paragraph()
-        p.add_run(f"{resume['n_associations_significatives']} association(s) significative(s) (p < 0.05) : ").bold = True
-        p.add_run(", ".join(resume["variables_significatives"]))
+        p.add_run(f"{resume['n_associations_significatives']} association(s) significative(s) (p < 0.05) :").bold = True
+        for phrase in resume.get("phrases_significatives", []):
+            doc.add_paragraph(phrase, style="List Bullet")
     else:
         doc.add_paragraph("Aucune association significative (p < 0.05) détectée.")
 
@@ -171,11 +181,11 @@ def _add_resume(doc: Document, resume: dict, variable_principale: str) -> None:
 def _add_associations(doc: Document, associations: list, variable_principale: str) -> None:
     doc.add_heading(f"Tests d'association avec « {variable_principale} »", level=2)
 
-    table = doc.add_table(rows=1, cols=6)
+    table = doc.add_table(rows=1, cols=7)
     table.style = "Light Grid Accent 1"
     hdr = table.rows[0].cells
-    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text, hdr[4].text, hdr[5].text = (
-        "Variable", "Test", "p-value", "p corrigée", "Significatif", "Taille d'effet"
+    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text, hdr[4].text, hdr[5].text, hdr[6].text = (
+        "Variable", "Test", "p-value", "p corrigée", "Significatif", "Taille d'effet", "En clair"
     )
 
     for assoc in associations:
@@ -186,6 +196,7 @@ def _add_associations(doc: Document, associations: list, variable_principale: st
         row[3].text = str(assoc["p_value_corrigee"])
         row[4].text = "Oui" if assoc["significatif"] else "Non"
         row[5].text = _format_effect_size(assoc.get("effect_size"))
+        row[6].text = assoc.get("interpretation", "")
 
     doc.add_paragraph()
 
