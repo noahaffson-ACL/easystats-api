@@ -65,6 +65,7 @@ def analyze(body: AnalyzeRequest):
             data=body.data,
             var_dep=body.variable_dependante,
             vars_indep=body.variables_independantes,
+            type_etude=body.type_etude,
             groupes=body.groupes,
         )
     except ValueError as exc:
@@ -80,6 +81,7 @@ def export_docx(body: AnalyzeRequest):
             data=body.data,
             var_dep=body.variable_dependante,
             vars_indep=body.variables_independantes,
+            type_etude=body.type_etude,
             groupes=body.groupes,
         )
     except ValueError as exc:

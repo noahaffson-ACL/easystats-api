@@ -92,6 +92,102 @@ def _normal_groups(samples: List[np.ndarray]) -> bool:
     return True
 
 
+# ── Effect sizes ───────────────────────────────────────
+
+def _cohens_d(s1: np.ndarray, s2: np.ndarray) -> float:
+    n1, n2 = len(s1), len(s2)
+    pooled_var = ((n1 - 1) * np.var(s1, ddof=1) + (n2 - 1) * np.var(s2, ddof=1)) / (n1 + n2 - 2)
+    if pooled_var == 0:
+        return 0.0
+    return float((np.mean(s1) - np.mean(s2)) / np.sqrt(pooled_var))
+
+
+def _rank_biserial(u_stat: float, n1: int, n2: int) -> float:
+    return float(1 - (2 * u_stat) / (n1 * n2))
+
+
+def _eta_squared_anova(samples: List[np.ndarray]) -> float:
+    all_vals = np.concatenate(samples)
+    grand_mean = all_vals.mean()
+    ss_total = np.sum((all_vals - grand_mean) ** 2)
+    if ss_total == 0:
+        return 0.0
+    ss_between = sum(len(s) * (np.mean(s) - grand_mean) ** 2 for s in samples)
+    return float(ss_between / ss_total)
+
+
+def _eta_squared_kruskal(h_stat: float, n: int, k: int) -> float:
+    if n - k == 0:
+        return 0.0
+    return float((h_stat - k + 1) / (n - k))
+
+
+def _cramers_v(chi2: float, contingency: pd.DataFrame) -> float:
+    n = contingency.values.sum()
+    r, c = contingency.shape
+    denom = n * (min(r, c) - 1)
+    if denom == 0:
+        return 0.0
+    return float(np.sqrt(chi2 / denom))
+
+
+def _odds_ratio_2x2(contingency: pd.DataFrame):
+    table = contingency.to_numpy(dtype=float)
+    a, b = table[0, 0], table[0, 1]
+    c, d = table[1, 0], table[1, 1]
+    if 0 in (a, b, c, d):
+        a, b, c, d = a + 0.5, b + 0.5, c + 0.5, d + 0.5
+    or_val = (a * d) / (b * c)
+    se = np.sqrt(1 / a + 1 / b + 1 / c + 1 / d)
+    ic95 = [float(or_val * np.exp(-1.96 * se)), float(or_val * np.exp(1.96 * se))]
+    return float(or_val), ic95
+
+
+def _interpret_d(d: float) -> str:
+    d = abs(d)
+    if d < 0.2:
+        return "négligeable"
+    if d < 0.5:
+        return "faible"
+    if d < 0.8:
+        return "moyen"
+    return "fort"
+
+
+def _interpret_r(r: float) -> str:
+    r = abs(r)
+    if r < 0.1:
+        return "négligeable"
+    if r < 0.3:
+        return "faible"
+    if r < 0.5:
+        return "modérée"
+    if r < 0.7:
+        return "forte"
+    return "très forte"
+
+
+def _interpret_eta2(eta2: float) -> str:
+    eta2 = abs(eta2)
+    if eta2 < 0.01:
+        return "négligeable"
+    if eta2 < 0.06:
+        return "faible"
+    if eta2 < 0.14:
+        return "moyen"
+    return "fort"
+
+
+def _interpret_cramers_v(v: float) -> str:
+    if v < 0.1:
+        return "négligeable"
+    if v < 0.3:
+        return "faible"
+    if v < 0.5:
+        return "moyen"
+    return "fort"
+
+
 def bivariate_test(df: pd.DataFrame, var_dep: str, var_groupe: str) -> Optional[dict]:
     """Compare `var_dep` across the groups defined by `var_groupe`.
 
@@ -116,35 +212,48 @@ def bivariate_test(df: pd.DataFrame, var_dep: str, var_groupe: str) -> Optional[
             return None
 
         normal = _normal_groups(samples)
+        effect_size = None
 
         if n_groupes == 2:
             if normal:
                 stat, p_val = stats.ttest_ind(*samples)
                 test_nom = "t-test de Student"
+                d = _cohens_d(samples[0], samples[1])
+                effect_size = {"nom": "d de Cohen", "valeur": round(d, 4), "interpretation": _interpret_d(d)}
             else:
                 stat, p_val = stats.mannwhitneyu(*samples)
                 test_nom = "Mann-Whitney U"
+                r = _rank_biserial(float(stat), len(samples[0]), len(samples[1]))
+                effect_size = {"nom": "corrélation rang-bisériale", "valeur": round(r, 4), "interpretation": _interpret_r(r)}
         else:
             if normal:
                 stat, p_val = stats.f_oneway(*samples)
                 test_nom = "ANOVA à un facteur"
+                eta2 = _eta_squared_anova(samples)
+                effect_size = {"nom": "eta carré", "valeur": round(eta2, 4), "interpretation": _interpret_eta2(eta2)}
             else:
                 stat, p_val = stats.kruskal(*samples)
                 test_nom = "Test de Kruskal-Wallis"
+                eta2 = _eta_squared_kruskal(float(stat), len(sub), n_groupes)
+                effect_size = {"nom": "eta carré (approx.)", "valeur": round(eta2, 4), "interpretation": _interpret_eta2(eta2)}
 
-        return {
+        result = {
             "test": test_nom,
             "statistic": round(float(stat), 4),
             "p_value": round(float(p_val), 4),
             "significatif": bool(p_val < 0.05),
             "groupes": [str(g) for g in groupes]
         }
+        if effect_size is not None:
+            result["effect_size"] = effect_size
+        return result
 
     # Categorical outcome
     contingency = pd.crosstab(sub[var_groupe], sub[var_dep])
     chi2, p_val, dof, expected = stats.chi2_contingency(contingency)
     stat = chi2
     test_nom = "Chi² de Pearson"
+    effect_size = None
 
     if (expected < 5).any():
         if contingency.shape == (2, 2):
@@ -154,13 +263,22 @@ def bivariate_test(df: pd.DataFrame, var_dep: str, var_groupe: str) -> Optional[
         else:
             test_nom = "Chi² de Pearson (effectifs attendus < 5 dans certaines cellules, à interpréter avec prudence)"
 
-    return {
+    if contingency.shape == (2, 2):
+        or_val, ic95 = _odds_ratio_2x2(contingency)
+        effect_size = {"nom": "odds ratio", "valeur": round(or_val, 4), "ic95": [round(b, 4) for b in ic95]}
+    else:
+        v = _cramers_v(chi2, contingency)
+        effect_size = {"nom": "V de Cramér", "valeur": round(v, 4), "interpretation": _interpret_cramers_v(v)}
+
+    result = {
         "test": test_nom,
         "statistic": round(float(stat), 4) if stat is not None else None,
         "p_value": round(float(p_val), 4),
         "significatif": bool(p_val < 0.05),
-        "groupes": [str(g) for g in groupes]
+        "groupes": [str(g) for g in groupes],
+        "effect_size": effect_size
     }
+    return result
 
 
 def regression_analysis(df: pd.DataFrame, var_dep: str, vars_indep: List[str]) -> dict:
@@ -231,9 +349,56 @@ def regression_analysis(df: pd.DataFrame, var_dep: str, vars_indep: List[str]) -
     return result
 
 
+def correlation_analysis(df: pd.DataFrame, var_dep: str, vars_indep: List[str]) -> List[dict]:
+    """Pairwise correlation (Pearson or Spearman, depending on normality)
+    between `var_dep` and each numeric variable in `vars_indep`."""
+    if not _is_numeric(df[var_dep]):
+        raise ValueError("La variable dépendante doit être quantitative pour une analyse de corrélation")
+
+    correlations = []
+    for var in vars_indep:
+        if var not in df.columns:
+            raise ValueError(f"Variable inconnue : {var}")
+
+        if not _is_numeric(df[var]):
+            correlations.append({"variable": var, "erreur": "variable non quantitative, corrélation ignorée"})
+            continue
+
+        sub = df[[var_dep, var]].dropna()
+        if len(sub) < 3:
+            correlations.append({"variable": var, "erreur": "pas assez de données"})
+            continue
+
+        normal = _normal_groups([sub[var_dep].to_numpy(), sub[var].to_numpy()])
+        if normal:
+            r, p_val = stats.pearsonr(sub[var_dep], sub[var])
+            methode = "Pearson"
+        else:
+            r, p_val = stats.spearmanr(sub[var_dep], sub[var])
+            methode = "Spearman"
+
+        correlations.append({
+            "variable": var,
+            "methode": methode,
+            "r": round(float(r), 4),
+            "p_value": round(float(p_val), 4),
+            "significatif": bool(p_val < 0.05),
+            "n": int(len(sub)),
+            "interpretation": _interpret_r(float(r))
+        })
+
+    return correlations
+
+
 def run_analysis(data: List[dict], var_dep: str, vars_indep: List[str],
+                  type_etude: Optional[str] = None,
                   groupes: Optional[str] = None) -> dict:
-    """Run the full analysis pipeline shared by /analyze and /export-docx."""
+    """Run the full analysis pipeline shared by /analyze and /export-docx.
+
+    `type_etude` selects the analysis run on `vars_indep`:
+    - "correlation": pairwise Pearson/Spearman correlations
+    - anything else (default): multivariable regression
+    """
     df = pd.DataFrame(data)
     if var_dep not in df.columns:
         raise ValueError(f"Variable dépendante inconnue : {var_dep}")
@@ -246,9 +411,15 @@ def run_analysis(data: List[dict], var_dep: str, vars_indep: List[str],
             results["test_principal"] = test
 
     if vars_indep:
-        try:
-            results["regression"] = regression_analysis(df, var_dep, vars_indep)
-        except ValueError as exc:
-            results["regression_erreur"] = str(exc)
+        if type_etude == "correlation":
+            try:
+                results["correlations"] = correlation_analysis(df, var_dep, vars_indep)
+            except ValueError as exc:
+                results["correlations_erreur"] = str(exc)
+        else:
+            try:
+                results["regression"] = regression_analysis(df, var_dep, vars_indep)
+            except ValueError as exc:
+                results["regression_erreur"] = str(exc)
 
     return results

@@ -30,9 +30,10 @@ JSON results (or a generated .docx file).
 
 - **FastAPI** (0.111.0) + **Pydantic** (2.7.1) for the web API and request validation
 - **pandas** / **numpy** for data manipulation
-- **scipy.stats** for statistical tests (Shapiro-Wilk, t-test, Mann-Whitney U, Chi², Fisher's exact)
-- **statsmodels** — listed as a dependency but not yet used in `main.py`
-- **python-docx** — listed as a dependency but not yet used in `main.py` (intended for Word export)
+- **scipy.stats** for statistical tests (Shapiro-Wilk, t-test, Mann-Whitney U,
+  ANOVA, Kruskal-Wallis, Chi², Fisher's exact, Pearson/Spearman correlation)
+- **statsmodels** for multivariable linear (OLS) and logistic regression
+- **python-docx** for generating the `.docx` report (`docx_export.py`)
 - **uvicorn** as the ASGI server
 
 ## Running locally
@@ -83,15 +84,23 @@ All endpoints below (except `/health`) require `Depends(verify_api_key)`.
     For numeric outcomes: t-test/Mann-Whitney U (2 groups) or
     ANOVA/Kruskal-Wallis (3+ groups), chosen via per-group Shapiro-Wilk
     normality. For categorical outcomes: Chi² (or Fisher's exact for 2x2
-    tables with expected counts < 5).
-  - `regression`: present when `variables_independantes` is non-empty.
-    Runs an OLS (linear) or logistic regression via statsmodels, chosen
-    automatically based on whether `variable_dependante` is continuous or
-    binary. Returns coefficients/odds ratios with 95% CIs and p-values.
-    If the regression can't be computed (e.g. non-binary categorical
-    outcome), `regression_erreur` is returned instead with an explanation.
-  - `type_etude` is currently accepted but not yet used to alter the
-    analysis logic.
+    tables with expected counts < 5). Includes an `effect_size` block
+    (Cohen's d, rank-biserial r, eta², odds ratio with 95% CI, or Cramér's V
+    depending on the test).
+  - `variables_independantes` drives one of two analyses, selected by
+    `type_etude`:
+    - `type_etude == "correlation"` → `correlations`: pairwise Pearson
+      (if normal) or Spearman correlation between `variable_dependante`
+      and each numeric variable in `variables_independantes`, with r,
+      p-value and a qualitative interpretation. Non-numeric variables are
+      reported with an `erreur` field instead of being silently dropped.
+      Failures (e.g. non-numeric `variable_dependante`) produce
+      `correlations_erreur`.
+    - any other `type_etude` (default) → `regression`: OLS (linear) or
+      logistic regression via statsmodels, chosen automatically based on
+      whether `variable_dependante` is continuous or binary. Returns
+      coefficients/odds ratios with 95% CIs and p-values. Failures (e.g.
+      non-binary categorical outcome) produce `regression_erreur`.
 - `POST /export-docx` — same request body as `/analyze`; runs the same
   analysis pipeline and returns a generated `.docx` report
   (`rapport_analyse.docx`) via `docx_export.build_report`.
