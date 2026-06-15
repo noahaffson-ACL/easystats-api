@@ -104,6 +104,32 @@ All endpoints below (except `/health`) require `Depends(verify_api_key)`.
 - `POST /export-docx` — same request body as `/analyze`; runs the same
   analysis pipeline and returns a generated `.docx` report
   (`rapport_analyse.docx`) via `docx_export.build_report`.
+- `POST /analyse-automatique` — **the "zero statistical knowledge" entry
+  point**, built for a student who just wants results without choosing
+  tests/`type_etude`/`groupes`/`variables_independantes` themselves. Body is
+  just `{"data": [...], "variable_principale": "<nom_colonne>"}`. Internally
+  (`run_auto_analysis` in `stats_engine.py`):
+  - classifies `variable_principale` and every other column via
+    `_classify_variable` (same heuristic as `/detect-variables`); raises a
+    422 if `variable_principale` looks like free text.
+  - for every other column, automatically picks and runs the appropriate
+    bivariate test or correlation (reusing `bivariate_test` /
+    `correlation_analysis`) — the student doesn't pick a "groupes" variable,
+    every column is tried.
+  - returns `associations`: one entry per tested variable, sorted by
+    p-value, each with `p_value_corrigee` (Bonferroni-corrected across all
+    tests run) and `significatif_corrige`.
+  - fits an adjusted multivariable model (`regression`) using all other
+    usable columns as predictors; on failure (collinearity, too few
+    observations) returns `regression_erreur` with a plain-language
+    explanation instead of crashing.
+  - returns a `resume` block in plain French summarizing how many
+    associations were significant (raw and after Bonferroni correction),
+    meant to be shown directly to the student.
+- `POST /analyse-automatique/export-docx` — same body as
+  `/analyse-automatique`, returns `rapport_analyse_automatique.docx` via
+  `docx_export.build_auto_report` (summary, descriptive table, association
+  table, adjusted model).
 
 ### Error handling
 
@@ -139,13 +165,25 @@ avoid letting raw exceptions bubble up as 500s.
 - `RAILWAY_API_KEY` is expected to be set as an environment variable in the
   deployment environment.
 
+## Product principle: zero statistical knowledge required
+
+`/analyse-automatique` is the primary intended path for end users (medical
+students writing a thesis): they should be able to send their data plus the
+single variable they're studying and get back a usable, plain-language
+report — no need to understand "régression logistique", "type d'étude", or
+how to pick comparison groups. `/analyze` (manual, with `type_etude`,
+`groupes`, `variables_independantes`) remains available for power users / the
+Lovable frontend that wants finer control, but new "smart defaults" work
+should generally go into `run_auto_analysis` first.
+
 ## Making changes
 
 - Keep route definitions, request validation, and error handling in
   `main.py`; put statistical logic in `stats_engine.py` and Word-generation
-  logic in `docx_export.py`. `run_analysis()` in `stats_engine.py` is the
-  single shared pipeline used by both `/analyze` and `/export-docx` — extend
-  it rather than duplicating logic per endpoint.
+  logic in `docx_export.py`. `run_analysis()` and `run_auto_analysis()` in
+  `stats_engine.py` are the shared pipelines for the manual and automatic
+  flows respectively — extend them rather than duplicating logic per
+  endpoint.
 - When adding new statistical tests or output fields, keep response JSON
   shapes backward compatible where possible, since the Lovable frontend
   consumes this API directly.

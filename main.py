@@ -6,8 +6,8 @@ from typing import List, Optional
 import os
 import pandas as pd
 
-from stats_engine import detect_variables, run_analysis
-from docx_export import build_report
+from stats_engine import detect_variables, run_analysis, run_auto_analysis
+from docx_export import build_report, build_auto_report
 
 app = FastAPI(title="ThèsIA API", version="1.0.0")
 
@@ -94,4 +94,39 @@ def export_docx(body: AnalyzeRequest):
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": "attachment; filename=rapport_analyse.docx"},
+    )
+
+
+class AutoAnalyzeRequest(BaseModel):
+    data: List[dict]
+    variable_principale: str
+
+
+@app.post("/analyse-automatique", dependencies=[Depends(verify_api_key)])
+def analyse_automatique(body: AutoAnalyzeRequest):
+    """Analyse clé-en-main : l'étudiant fournit ses données et la seule
+    variable qu'il étudie. L'API teste automatiquement son association avec
+    toutes les autres variables et ajuste un modèle multivarié."""
+    try:
+        return run_auto_analysis(data=body.data, variable_principale=body.variable_principale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Erreur lors de l'analyse automatique : {exc}")
+
+
+@app.post("/analyse-automatique/export-docx", dependencies=[Depends(verify_api_key)])
+def analyse_automatique_export_docx(body: AutoAnalyzeRequest):
+    try:
+        results = run_auto_analysis(data=body.data, variable_principale=body.variable_principale)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Erreur lors de l'analyse automatique : {exc}")
+
+    buffer = build_auto_report(results)
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=rapport_analyse_automatique.docx"},
     )

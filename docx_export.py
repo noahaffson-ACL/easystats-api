@@ -131,6 +131,94 @@ def _add_correlations(doc: Document, correlations: list) -> None:
     doc.add_paragraph()
 
 
+def _format_effect_size(effect_size: dict) -> str:
+    if not effect_size:
+        return ""
+    if "ic95" in effect_size:
+        return f"{effect_size['nom']} = {effect_size['valeur']} (IC95% [{effect_size['ic95'][0]} ; {effect_size['ic95'][1]}])"
+    return f"{effect_size['nom']} = {effect_size['valeur']} ({effect_size.get('interpretation', '')})"
+
+
+def _add_resume(doc: Document, resume: dict, variable_principale: str) -> None:
+    doc.add_heading("Résumé", level=2)
+
+    doc.add_paragraph(
+        f"{resume['n_variables_testees']} variable(s) testée(s) en lien avec « {variable_principale} »."
+    )
+
+    if resume["variables_significatives"]:
+        p = doc.add_paragraph()
+        p.add_run(f"{resume['n_associations_significatives']} association(s) significative(s) (p < 0.05) : ").bold = True
+        p.add_run(", ".join(resume["variables_significatives"]))
+    else:
+        doc.add_paragraph("Aucune association significative (p < 0.05) détectée.")
+
+    if resume.get("avertissement"):
+        p = doc.add_paragraph()
+        p.add_run("Important : ").bold = True
+        p.add_run(resume["avertissement"])
+
+        if resume["variables_significatives_apres_correction"]:
+            p = doc.add_paragraph()
+            p.add_run("Après correction de Bonferroni, restent significatives : ").bold = True
+            p.add_run(", ".join(resume["variables_significatives_apres_correction"]))
+        else:
+            doc.add_paragraph("Après correction de Bonferroni, aucune association ne reste significative.")
+
+    doc.add_paragraph()
+
+
+def _add_associations(doc: Document, associations: list, variable_principale: str) -> None:
+    doc.add_heading(f"Tests d'association avec « {variable_principale} »", level=2)
+
+    table = doc.add_table(rows=1, cols=6)
+    table.style = "Light Grid Accent 1"
+    hdr = table.rows[0].cells
+    hdr[0].text, hdr[1].text, hdr[2].text, hdr[3].text, hdr[4].text, hdr[5].text = (
+        "Variable", "Test", "p-value", "p corrigée", "Significatif", "Taille d'effet"
+    )
+
+    for assoc in associations:
+        row = table.add_row().cells
+        row[0].text = assoc["variable"]
+        row[1].text = assoc["test"]
+        row[2].text = str(assoc["p_value"])
+        row[3].text = str(assoc["p_value_corrigee"])
+        row[4].text = "Oui" if assoc["significatif"] else "Non"
+        row[5].text = _format_effect_size(assoc.get("effect_size"))
+
+    doc.add_paragraph()
+
+
+def build_auto_report(results: dict) -> io.BytesIO:
+    doc = Document()
+
+    variable_principale = results["variable_principale"]
+    doc.add_heading("Rapport d'analyse automatique — ThèsIA", level=1)
+    doc.styles["Normal"].font.size = Pt(11)
+    doc.add_paragraph(f"Variable principale étudiée : {variable_principale}")
+
+    if "resume" in results:
+        _add_resume(doc, results["resume"], variable_principale)
+
+    if results.get("tableau_descriptif"):
+        _add_descriptive_table(doc, results["tableau_descriptif"])
+
+    if results.get("associations"):
+        _add_associations(doc, results["associations"], variable_principale)
+
+    if "regression" in results:
+        _add_regression(doc, results["regression"])
+    elif "regression_erreur" in results:
+        doc.add_heading("Analyse multivariée", level=2)
+        doc.add_paragraph(f"Modèle ajusté non calculé : {results['regression_erreur']}")
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
 def build_report(results: dict) -> io.BytesIO:
     doc = Document()
 

@@ -13,6 +13,15 @@ def _is_numeric(series: pd.Series) -> bool:
     return pd.api.types.is_numeric_dtype(series)
 
 
+def _classify_variable(series: pd.Series) -> str:
+    """Infer a variable's role: 'categorielle', 'quantitative_continue' or 'texte'."""
+    s = series.dropna()
+    unique_vals = s.nunique()
+    if _is_numeric(s):
+        return "categorielle" if unique_vals <= 5 else "quantitative_continue"
+    return "categorielle" if unique_vals <= 10 else "texte"
+
+
 def detect_variables(df: pd.DataFrame) -> dict:
     if len(df) == 0:
         return {"variables": [], "n_observations": 0, "qualite_globale": "indéterminée"}
@@ -25,11 +34,7 @@ def detect_variables(df: pd.DataFrame) -> dict:
         series = df[col].dropna()
         missing_pct = round((df[col].isna().sum() / len(df)) * 100, 1)
         unique_vals = series.nunique()
-
-        if _is_numeric(series):
-            var_type = "categorielle" if unique_vals <= 5 else "quantitative_continue"
-        else:
-            var_type = "categorielle" if unique_vals <= 10 else "texte"
+        var_type = _classify_variable(df[col])
 
         variables.append({
             "name": col,
@@ -421,5 +426,105 @@ def run_analysis(data: List[dict], var_dep: str, vars_indep: List[str],
                 results["regression"] = regression_analysis(df, var_dep, vars_indep)
             except ValueError as exc:
                 results["regression_erreur"] = str(exc)
+
+    return results
+
+
+def run_auto_analysis(data: List[dict], variable_principale: str) -> dict:
+    """Fully automatic analysis: given only the data and the variable the
+    student wants to study, test its association with every other variable
+    in the dataset (choosing the appropriate test automatically) and fit an
+    adjusted multivariable model. Designed so a student needs no statistical
+    knowledge to get a complete, usable set of results."""
+    df = pd.DataFrame(data)
+    if variable_principale not in df.columns:
+        raise ValueError(f"Variable inconnue : {variable_principale}")
+
+    type_principale = _classify_variable(df[variable_principale])
+    if type_principale == "texte":
+        raise ValueError(
+            f"La variable '{variable_principale}' semble être un champ de texte libre "
+            "et ne peut pas être analysée statistiquement. Choisissez une variable "
+            "numérique ou une variable à choix (catégorielle)."
+        )
+
+    results: dict = {
+        "variable_principale": variable_principale,
+        "type_variable_principale": type_principale,
+        "tableau_descriptif": descriptive_table(df),
+    }
+
+    autres = [c for c in df.columns if c != variable_principale and not c.startswith("_")]
+
+    associations = []
+    for var in autres:
+        type_var = _classify_variable(df[var])
+        if type_var == "texte":
+            continue
+
+        try:
+            if type_var == "categorielle":
+                test = bivariate_test(df, variable_principale, var)
+                if test is None:
+                    continue
+                association = {"variable": var, **test}
+            elif type_principale == "quantitative_continue":
+                corr = correlation_analysis(df, variable_principale, [var])[0]
+                if "erreur" in corr:
+                    continue
+                association = {
+                    "variable": var,
+                    "test": f"Corrélation de {corr['methode']}",
+                    "statistic": corr["r"],
+                    "p_value": corr["p_value"],
+                    "significatif": corr["significatif"],
+                    "effect_size": {"nom": "r", "valeur": corr["r"], "interpretation": corr["interpretation"]}
+                }
+            else:
+                test = bivariate_test(df, var, variable_principale)
+                if test is None:
+                    continue
+                association = {"variable": var, **test}
+        except ValueError:
+            continue
+
+        associations.append(association)
+
+    n_tests = len(associations)
+    for assoc in associations:
+        p_corrigee = min(assoc["p_value"] * n_tests, 1.0) if n_tests else assoc["p_value"]
+        assoc["p_value_corrigee"] = round(p_corrigee, 4)
+        assoc["significatif_corrige"] = bool(p_corrigee < 0.05)
+
+    associations.sort(key=lambda a: a["p_value"])
+    results["associations"] = associations
+
+    # Adjusted multivariable model using every other usable variable as predictor
+    vars_regression = [v for v in autres if _classify_variable(df[v]) != "texte"]
+    if vars_regression:
+        try:
+            results["regression"] = regression_analysis(df, variable_principale, vars_regression)
+        except Exception as exc:
+            results["regression_erreur"] = (
+                "Le modèle ajusté n'a pas pu être calculé avec toutes les variables "
+                f"disponibles ({exc}). Essayez avec moins de variables ou plus d'observations."
+            )
+
+    significatifs = [a for a in associations if a["significatif"]]
+    significatifs_corriges = [a for a in associations if a["significatif_corrige"]]
+
+    results["resume"] = {
+        "n_variables_testees": n_tests,
+        "n_associations_significatives": len(significatifs),
+        "variables_significatives": [a["variable"] for a in significatifs],
+        "n_associations_significatives_apres_correction": len(significatifs_corriges),
+        "variables_significatives_apres_correction": [a["variable"] for a in significatifs_corriges],
+        "avertissement": (
+            "Tester de nombreuses variables augmente le risque de faux positifs (comparaisons "
+            "multiples). La colonne 'p_value_corrigee' applique une correction de Bonferroni : "
+            "privilégiez-la pour vos conclusions principales, en particulier pour les variables "
+            "qui n'étaient pas votre hypothèse de départ."
+        ) if n_tests > 1 else None
+    }
 
     return results
