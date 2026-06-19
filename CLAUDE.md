@@ -34,6 +34,8 @@ JSON results (or a generated .docx file).
   ANOVA, Kruskal-Wallis, Chi², Fisher's exact, Pearson/Spearman correlation)
 - **statsmodels** for multivariable linear (OLS) and logistic regression
 - **python-docx** for generating the `.docx` report (`docx_export.py`)
+- **matplotlib** (Agg backend, headless) for the bar charts embedded in `.docx`
+  reports
 - **uvicorn** as the ASGI server
 
 ## Running locally
@@ -111,7 +113,12 @@ All endpoints below (except `/health`) require `Depends(verify_api_key)`.
       `regression_erreur`.
 - `POST /export-docx` — same request body as `/analyze`; runs the same
   analysis pipeline and returns a generated `.docx` report
-  (`rapport_analyse.docx`) via `docx_export.build_report`.
+  (`rapport_analyse.docx`) via `docx_export.build_report`. For every
+  categorical variable in `tableau_descriptif`, a bar chart of the category
+  percentages is generated with matplotlib and embedded next to its
+  frequency table, captioned `"Figure N — Répartition de « var »"`
+  (numbered, titled above the image, following the CAMES editorial
+  convention for illustrations: numbered, titled, referenced in text).
 - `POST /analyse-automatique` — **the "zero statistical knowledge" entry
   point**, built for a student who just wants results without choosing
   tests/`type_etude`/`groupes`/`variables_independantes` themselves. Body is
@@ -136,8 +143,9 @@ All endpoints below (except `/health`) require `Depends(verify_api_key)`.
     meant to be shown directly to the student.
 - `POST /analyse-automatique/export-docx` — same body as
   `/analyse-automatique`, returns `rapport_analyse_automatique.docx` via
-  `docx_export.build_auto_report` (summary, descriptive table, association
-  table, adjusted model).
+  `docx_export.build_auto_report` (summary, descriptive table — with the
+  same embedded bar charts as `/export-docx` — association table, adjusted
+  model).
 
 ### Error handling
 
@@ -199,3 +207,8 @@ should generally go into `run_auto_analysis` first.
   consider adding `pytest` tests for `stats_engine.py` functions, since
   correctness bugs there can produce scientifically wrong results without
   any crash.
+- `docx_export.py` threads a `fig_counter` (one-element list, used as a
+  mutable counter) through the report-building functions so every embedded
+  chart gets a sequential "Figure N" caption across the whole document. If
+  you add a new chart type, increment the same counter rather than starting
+  a separate numbering sequence.

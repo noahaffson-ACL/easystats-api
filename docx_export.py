@@ -3,11 +3,39 @@ stats_engine.run_analysis."""
 
 import io
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 from docx import Document
-from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt
 
 
-def _add_descriptive_table(doc: Document, tableau_descriptif: dict) -> None:
+def _add_bar_chart(doc: Document, fig_counter: list, titre: str, categories: list, pourcentages: list) -> None:
+    """Diagramme en barres numéroté et titré au-dessus (convention CAMES pour
+    les illustrations : numérotées, titrées, commentées dans le texte)."""
+    fig_counter[0] += 1
+    p = doc.add_paragraph()
+    p.add_run(f"Figure {fig_counter[0]} — {titre}").bold = True
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.bar([str(c) for c in categories], pourcentages, color="#4472C4")
+    ax.set_ylabel("%")
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+    fig.tight_layout()
+
+    image_stream = io.BytesIO()
+    fig.savefig(image_stream, format="png", dpi=150)
+    plt.close(fig)
+    image_stream.seek(0)
+
+    doc.add_picture(image_stream, width=Inches(4.5))
+    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph()
+
+
+def _add_descriptive_table(doc: Document, tableau_descriptif: dict, fig_counter: list) -> None:
     doc.add_heading("Tableau I — Statistiques descriptives", level=2)
 
     for var, stats_var in tableau_descriptif.items():
@@ -39,6 +67,10 @@ def _add_descriptive_table(doc: Document, tableau_descriptif: dict) -> None:
             for cat, freq in stats_var["frequences"].items():
                 row = table.add_row().cells
                 row[0].text, row[1].text, row[2].text = str(cat), str(freq["n"]), f"{freq['pct']}%"
+
+            categories = list(stats_var["frequences"].keys())
+            pourcentages = [freq["pct"] for freq in stats_var["frequences"].values()]
+            _add_bar_chart(doc, fig_counter, f"Répartition de « {var} »", categories, pourcentages)
 
         doc.add_paragraph()
 
@@ -209,11 +241,13 @@ def build_auto_report(results: dict) -> io.BytesIO:
     doc.styles["Normal"].font.size = Pt(11)
     doc.add_paragraph(f"Variable principale étudiée : {variable_principale}")
 
+    fig_counter = [0]
+
     if "resume" in results:
         _add_resume(doc, results["resume"], variable_principale)
 
     if results.get("tableau_descriptif"):
-        _add_descriptive_table(doc, results["tableau_descriptif"])
+        _add_descriptive_table(doc, results["tableau_descriptif"], fig_counter)
 
     if results.get("associations"):
         _add_associations(doc, results["associations"], variable_principale)
@@ -236,8 +270,10 @@ def build_report(results: dict) -> io.BytesIO:
     doc.add_heading("Rapport d'analyse statistique — ThèsIA", level=1)
     doc.styles["Normal"].font.size = Pt(11)
 
+    fig_counter = [0]
+
     if "tableau_descriptif" in results and results["tableau_descriptif"]:
-        _add_descriptive_table(doc, results["tableau_descriptif"])
+        _add_descriptive_table(doc, results["tableau_descriptif"], fig_counter)
 
     if "test_principal" in results:
         _add_test_principal(doc, results["test_principal"])
